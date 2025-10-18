@@ -12,8 +12,8 @@ option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
     version: "1.0.0"
   }
   external_docs: {
-    url: "https://github.com/zcking/clean-api-lite";
-    description: "clean-api-lite repository";
+    url: "https://github.com/zcking/go-api-template";
+    description: "go-api-template repository";
   }
   schemes: HTTPS;
 };

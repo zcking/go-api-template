@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	userspb "github.com/zcking/clean-api-lite/gen/go/users/v1"
-	"github.com/zcking/clean-api-lite/internal"
+	userspb "github.com/zcking/go-api-template/gen/go/users/v1"
+	"github.com/zcking/go-api-template/internal"
 )
 
 var (

@@ -60,7 +60,7 @@
           "201": {
             "description": "User created",
             "schema": {
-              "$ref": "#/definitions/v1User"
+              "$ref": ".auth.v1.User"
             }
           },
           "default": {
@@ -163,7 +163,7 @@
     }
   },
   "externalDocs": {
-    "description": "clean-api-lite repository",
-    "url": "https://github.com/zcking/clean-api-lite"
+    "description": "go-api-template repository",
+    "url": "https://github.com/zcking/go-api-template"
   }
 }

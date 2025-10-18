@@ -1,4 +1,4 @@
-# Clean API Lite
+# Go API Template
 
 This is a template I created for a simple, clean API implementation using the following tech stack:  
 
@@ -23,7 +23,7 @@ make docker docker/run
 You should see an output like the following:  
 
 ```
-docker run --rm -it -p 8080:8080 -p 8081:8081 clean-api-lite
+docker run --rm -it -p 8080:8080 -p 8081:8081 go-api-template
 2024/06/06 01:24:05 setting up database at lite.duckdb...
 2024/06/06 01:24:05 gRPC Gateway listening on http://0.0.0.0:8081
 ```

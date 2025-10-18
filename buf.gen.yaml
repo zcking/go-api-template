@@ -8,7 +8,7 @@ managed:
     - module: buf.build/grpc-ecosystem/grpc-gateway
   override:
     - file_option: go_package_prefix
-      value: github.com/zcking/clean-api-lite
+      value: github.com/zcking/go-api-template
 plugins:
   # Use the latest version of protoc-gen-go
   - remote: buf.build/protocolbuffers/go

@@ -1,7 +1,7 @@
 version: v2
 modules:
   - path: proto
-    name: buf.build/zcking/clean-api-lite
+    name: buf.build/zcking/go-api-template
 deps:
   - buf.build/googleapis/googleapis
   - buf.build/grpc-ecosystem/grpc-gateway

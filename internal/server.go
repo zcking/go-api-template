@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 
-	userspb "github.com/zcking/clean-api-lite/gen/go/users/v1"
+	userspb "github.com/zcking/go-api-template/gen/go/users/v1"
 )
 
 type UsersServer struct {
