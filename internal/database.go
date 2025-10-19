@@ -3,9 +3,10 @@ package internal
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/lib/pq"
 	userspb "github.com/zcking/go-api-template/gen/go/users/v1"
 )
 
@@ -13,45 +14,39 @@ type Database struct {
 	db *sql.DB
 }
 
-func NewDatabase(databaseLocation string) (*Database, error) {
-	log.Printf("setting up database at %s...", databaseLocation)
-	db, err := sql.Open("duckdb", databaseLocation)
+type DatabaseConfig struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
+}
+
+func NewDatabase(config DatabaseConfig) (*Database, error) {
+	log.Printf("setting up database connection to %s:%s/%s...", config.Host, config.Port, config.DBName)
+
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		config.Host, config.Port, config.User, config.Password, config.DBName, config.SSLMode)
+
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
+	}
+
+	// Test the connection
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	ddb := &Database{
 		db: db,
 	}
-	return ddb, ddb.setup()
-}
-
-func (d *Database) setup() error {
-	_, err := d.db.Exec("CREATE SEQUENCE IF NOT EXISTS seq_users_id START 1;")
-	if err != nil {
-		return err
-	}
-
-	_, err = d.db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY DEFAULT nextval('seq_users_id'),
-			email TEXT NOT NULL,
-			name TEXT NOT NULL
-		);
-	`)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ddb, nil
 }
 
 func (d *Database) Close() error {
 	log.Println("shutting down database connection...")
-	if _, err := d.db.Exec("CHECKPOINT"); err != nil {
-		return err
-	}
-
 	return d.db.Close()
 }
 
@@ -77,7 +72,7 @@ func (d *Database) GetUsers(ctx context.Context) (*userspb.ListUsersResponse, er
 }
 
 func (d *Database) CreateUser(ctx context.Context, req *userspb.CreateUserRequest) (*userspb.CreateUserResponse, error) {
-	row := d.db.QueryRowContext(ctx, "INSERT INTO users (email, name) VALUES (?, ?) RETURNING (id);", req.GetEmail(), req.GetName())
+	row := d.db.QueryRowContext(ctx, "INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id;", req.GetEmail(), req.GetName())
 	if row.Err() != nil {
 		return nil, row.Err()
 	}

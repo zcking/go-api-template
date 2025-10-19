@@ -2,7 +2,6 @@ proto/
 .tool-versions
 .gitignore
 buf.*
-*.duckdb*
 Makefile
 *.md
 Dockerfile

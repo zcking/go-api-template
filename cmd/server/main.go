@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
@@ -23,14 +27,41 @@ import (
 )
 
 var (
-	databaseLocation = flag.String("database-location", "lite.duckdb", "Location of the DuckDB database file")
+	dbHost     = flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "Database host")
+	dbPort     = flag.String("db-port", getEnvOrDefault("DB_PORT", "5432"), "Database port")
+	dbUser     = flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "Database user")
+	dbPassword = flag.String("db-password", getEnvOrDefault("DB_PASSWORD", "postgres"), "Database password")
+	dbName     = flag.String("db-name", getEnvOrDefault("DB_NAME", "go_api_template"), "Database name")
+	dbSSLMode  = flag.String("db-ssl-mode", getEnvOrDefault("DB_SSLMODE", "disable"), "Database SSL mode")
 )
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
 
 func main() {
 	// Initialize zap logger
 	logger, _ := zap.NewProduction(zap.AddCaller())
 	defer logger.Sync()
 	flag.Parse()
+
+	// Setup database configuration
+	dbConfig := internal.DatabaseConfig{
+		Host:     *dbHost,
+		Port:     *dbPort,
+		User:     *dbUser,
+		Password: *dbPassword,
+		DBName:   *dbName,
+		SSLMode:  *dbSSLMode,
+	}
+
+	// Run database migrations
+	if err := runMigrations(dbConfig); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
 
 	// Create a TCP listener for the gRPC server
 	lis, err := net.Listen("tcp", ":8080")
@@ -50,7 +81,7 @@ func main() {
 		)),
 	}
 	grpcServer := grpc.NewServer(opts...)
-	impl, err := internal.NewUsersServer(*databaseLocation)
+	impl, err := internal.NewUsersServer(dbConfig)
 	if err != nil {
 		log.Fatalf("failed to create UsersServer instance: %v", err)
 	}
@@ -96,4 +127,26 @@ func main() {
 	}
 	log.Println("gRPC Gateway listening on http://0.0.0.0:8081")
 	log.Fatalln(gwServer.ListenAndServe())
+}
+
+func runMigrations(config internal.DatabaseConfig) error {
+	// Build database URL for migrations
+	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		config.User, config.Password, config.Host, config.Port, config.DBName, config.SSLMode)
+
+	// Create migration instance
+	// TODO: ensure migrations are only run once, not on every pod?
+	m, err := migrate.New("file://migrations", dbURL)
+	if err != nil {
+		return fmt.Errorf("failed to create migration instance: %w", err)
+	}
+	defer m.Close()
+
+	// Run migrations
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	log.Println("Database migrations completed successfully")
+	return nil
 }

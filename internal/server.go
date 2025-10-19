@@ -12,8 +12,8 @@ type UsersServer struct {
 	db *Database
 }
 
-func NewUsersServer(databaseLocation string) (*UsersServer, error) {
-	db, err := NewDatabase(databaseLocation)
+func NewUsersServer(config DatabaseConfig) (*UsersServer, error) {
+	db, err := NewDatabase(config)
 	if err != nil {
 		return nil, err
 	}
