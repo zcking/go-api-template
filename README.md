@@ -71,6 +71,14 @@ The application supports the following environment variables for database config
 - `DB_NAME` - Database name (default: go_api_template)
 - `DB_SSLMODE` - SSL mode (default: disable for local, require for production)
 
+The following environment variables are optional. These should be used to export OpenTelemetry traces to [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-overview).  
+
+- `DATABRICKS_WORKSPACE_URL` - Databricks workspace URL (e.g., `workspace_name.cloud.databricks.com`)
+- `DATABRICKS_TOKEN` - PAT or OAuth token for Zerobus authentication
+- `DATABRICKS_UC_TABLE_NAME` - Name of the table to write OTel spans to
+
+If the OTel configurations are not set, the API will continue to run as normal, but not export traces.
+
 ## Database Migrations
 
 Database migrations are **automatically run** when the application starts via `make compose/up`. No manual intervention needed for normal development!
