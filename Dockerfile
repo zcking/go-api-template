@@ -1,10 +1,13 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
 
 # Install git for go mod download
 RUN apk add --no-cache git
+
+# Set GOTOOLCHAIN to auto to allow automatic toolchain download
+ENV GOTOOLCHAIN=auto
 
 COPY go.mod go.sum ./
 RUN go mod download
