@@ -92,6 +92,21 @@ make compose/down
 make compose/up
 ```
 
+### Bring your own Postgres
+
+To connect to your own Postgres instance instead of the docker-compose service, copy the `.env` file to create `.env.local` and change as needed.
+
+For example, in production, we can use [Lakebase](https://www.databricks.com/product/lakebase) as our postgres database backend.
+
+```shell
+cp .env .env.local
+
+# Edit .env.local
+
+# Start only the API
+make compose/up/api
+```
+
 ### Manual Migration Commands
 
 You can also run migrations manually when needed:

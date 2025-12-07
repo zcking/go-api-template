@@ -21,6 +21,9 @@ docker/run:
 compose/up:
 	docker-compose up --build
 
+compose/up/api:
+	docker-compose up --build api
+
 compose/down:
 	docker-compose down
 

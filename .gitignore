@@ -4,5 +4,5 @@
 .vscode
 .idea
 *.swp
-.env
+.env.local
 /server
