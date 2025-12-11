@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/XSAM/otelsql"
 	_ "github.com/lib/pq"
 	userspb "github.com/zcking/go-api-template/gen/go/users/v1"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
 type Database struct {
@@ -29,7 +32,16 @@ func NewDatabase(config DatabaseConfig) (*Database, error) {
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		config.Host, config.Port, config.User, config.Password, config.DBName, config.SSLMode)
 
-	db, err := sql.Open("postgres", connStr)
+	// Open database connection with OpenTelemetry instrumentation
+	db, err := otelsql.Open("postgres", connStr,
+		otelsql.WithAttributes(
+			semconv.DBSystemPostgreSQL,
+			attribute.String("db.name", config.DBName),
+			attribute.String("db.user", config.User),
+			attribute.String("net.peer.name", config.Host),
+			attribute.String("net.peer.port", config.Port),
+		),
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -18,6 +19,8 @@ import (
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,12 +30,16 @@ import (
 )
 
 var (
-	dbHost     = flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "Database host")
-	dbPort     = flag.String("db-port", getEnvOrDefault("DB_PORT", "5432"), "Database port")
-	dbUser     = flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "Database user")
-	dbPassword = flag.String("db-password", getEnvOrDefault("DB_PASSWORD", "postgres"), "Database password")
-	dbName     = flag.String("db-name", getEnvOrDefault("DB_NAME", "go_api_template"), "Database name")
-	dbSSLMode  = flag.String("db-ssl-mode", getEnvOrDefault("DB_SSLMODE", "disable"), "Database SSL mode")
+	dbHost            = flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "Database host")
+	dbPort            = flag.String("db-port", getEnvOrDefault("DB_PORT", "5432"), "Database port")
+	dbUser            = flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "Database user")
+	dbPassword        = flag.String("db-password", getEnvOrDefault("DB_PASSWORD", "postgres"), "Database password")
+	dbName            = flag.String("db-name", getEnvOrDefault("DB_NAME", "go_api_template"), "Database name")
+	dbSSLMode         = flag.String("db-ssl-mode", getEnvOrDefault("DB_SSLMODE", "disable"), "Database SSL mode")
+	otelServiceName   = flag.String("otel-service-name", getEnvOrDefault("OTEL_SERVICE_NAME", "go-api-template"), "OpenTelemetry service name")
+	databricksURL     = flag.String("databricks-workspace-url", getEnvOrDefault("DATABRICKS_WORKSPACE_URL", ""), "Databricks workspace URL (e.g., myworkspace.databricks.com)")
+	databricksToken   = flag.String("databricks-token", getEnvOrDefault("DATABRICKS_TOKEN", ""), "Databricks authentication token")
+	databricksUCTable = flag.String("databricks-uc-table-name", getEnvOrDefault("DATABRICKS_UC_TABLE_NAME", ""), "Databricks Unity Catalog table name (e.g., catalog.schema.prefix_otel_spans)")
 )
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -47,6 +54,28 @@ func main() {
 	logger, _ := zap.NewProduction(zap.AddCaller())
 	defer logger.Sync()
 	flag.Parse()
+
+	// Initialize OpenTelemetry (optional - will use no-op if Databricks config is missing)
+	ctx := context.Background()
+	otelConfig := internal.OTelConfig{
+		ServiceName:     *otelServiceName,
+		WorkspaceURL:    *databricksURL,
+		Token:           *databricksToken,
+		UCTableName:     *databricksUCTable,
+		ShutdownTimeout: 30 * time.Second,
+	}
+	tp, err := internal.InitOTel(ctx, otelConfig)
+	if err != nil {
+		log.Fatalf("failed to initialize OpenTelemetry: %v", err)
+	}
+	// Only defer shutdown if TracerProvider was created (tp != nil)
+	if tp != nil {
+		defer func() {
+			if err := internal.ShutdownOTel(ctx, tp, otelConfig.ShutdownTimeout); err != nil {
+				log.Printf("failed to shutdown OpenTelemetry: %v", err)
+			}
+		}()
+	}
 
 	// Setup database configuration
 	dbConfig := internal.DatabaseConfig{
@@ -79,6 +108,7 @@ func main() {
 			grpc_ctxtags.StreamServerInterceptor(),
 			grpc_zap.StreamServerInterceptor(logger),
 		)),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	}
 	grpcServer := grpc.NewServer(opts...)
 	impl, err := internal.NewUsersServer(dbConfig)
@@ -86,19 +116,6 @@ func main() {
 		log.Fatalf("failed to create UsersServer instance: %v", err)
 	}
 	userspb.RegisterUserServiceServer(grpcServer, impl)
-
-	// Catch interrupt signal to gracefully shutdown the server
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-signalChan
-		log.Printf("received signal %s | shutting down gRPC server...\n", sig)
-		grpcServer.GracefulStop()
-		if err := impl.Close(); err != nil {
-			log.Fatalf("failed to properly close UsersServer: %v", err)
-		}
-	}()
 
 	// Serve the gRPC server, in a separate goroutine to avoid blocking
 	go func() {
@@ -109,6 +126,7 @@ func main() {
 	conn, err := grpc.NewClient(
 		"0.0.0.0:8080",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
 		log.Fatalf("failed to create gRPC client: %v", err)
@@ -120,11 +138,46 @@ func main() {
 		log.Fatalf("failed to register gRPC gateway: %v", err)
 	}
 
+	// Wrap HTTP handler with OpenTelemetry instrumentation
+	otelHandler := otelhttp.NewHandler(mux, "grpc-gateway",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	)
+
 	// Start HTTP server to proxy requests to gRPC server
 	gwServer := &http.Server{
 		Addr:    ":8081",
-		Handler: mux,
+		Handler: otelHandler,
 	}
+
+	// Catch interrupt signal to gracefully shutdown the server
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-signalChan
+		log.Printf("received signal %s | shutting down servers...\n", sig)
+
+		// Shutdown HTTP server
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := gwServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("failed to shutdown HTTP server: %v", err)
+		}
+
+		// Shutdown gRPC server
+		grpcServer.GracefulStop()
+
+		// Close database connection
+		if err := impl.Close(); err != nil {
+			log.Fatalf("failed to properly close UsersServer: %v", err)
+		}
+
+		// Shutdown OpenTelemetry
+		if err := internal.ShutdownOTel(context.Background(), tp, otelConfig.ShutdownTimeout); err != nil {
+			log.Printf("failed to shutdown OpenTelemetry: %v", err)
+		}
+	}()
+
 	log.Println("gRPC Gateway listening on http://0.0.0.0:8081")
 	log.Fatalln(gwServer.ListenAndServe())
 }
