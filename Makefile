@@ -10,9 +10,20 @@ generate:
 lint:
 	go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION) breaking --against 'https://github.com/zcking/go-api-template.git#branch=main'
 
+fmt:
+	go fmt ./...
+
+# Test commands
+test:
+	go test ./... -v
+
+test/coverage:
+	go test ./cmd/... ./internal/... -coverprofile=coverage.out
+	go tool cover -html=coverage.out -o coverage.html
+
 # Docker commands
 docker:
-	docker build -t go-api-template .
+	docker build --load -t go-api-template .
 
 docker/run:
 	docker run --rm -it -p 8080:8080 -p 8081:8081 go-api-template

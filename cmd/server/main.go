@@ -27,6 +27,7 @@ import (
 
 	userspb "github.com/zcking/go-api-template/gen/go/users/v1"
 	"github.com/zcking/go-api-template/internal"
+	"github.com/zcking/go-api-template/internal/users"
 )
 
 var (
@@ -78,7 +79,7 @@ func main() {
 	}
 
 	// Setup database configuration
-	dbConfig := internal.DatabaseConfig{
+	dbConfig := users.Config{
 		Host:     *dbHost,
 		Port:     *dbPort,
 		User:     *dbUser,
@@ -111,9 +112,9 @@ func main() {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	}
 	grpcServer := grpc.NewServer(opts...)
-	impl, err := internal.NewUsersServer(dbConfig)
+	impl, err := users.NewService(dbConfig)
 	if err != nil {
-		log.Fatalf("failed to create UsersServer instance: %v", err)
+		log.Fatalf("failed to create users service instance: %v", err)
 	}
 	userspb.RegisterUserServiceServer(grpcServer, impl)
 
@@ -169,7 +170,7 @@ func main() {
 
 		// Close database connection
 		if err := impl.Close(); err != nil {
-			log.Fatalf("failed to properly close UsersServer: %v", err)
+			log.Fatalf("failed to properly close users service: %v", err)
 		}
 
 		// Shutdown OpenTelemetry
@@ -182,7 +183,7 @@ func main() {
 	log.Fatalln(gwServer.ListenAndServe())
 }
 
-func runMigrations(config internal.DatabaseConfig) error {
+func runMigrations(config users.Config) error {
 	// Build database URL for migrations
 	dbURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
 		config.User, config.Password, config.Host, config.Port, config.DBName, config.SSLMode)
