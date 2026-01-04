@@ -6,3 +6,7 @@
 *.swp
 .env.local
 /server
+
+# Coverage
+coverage.out
+coverage.html

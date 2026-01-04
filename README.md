@@ -146,6 +146,140 @@ export DB_NAME=your-production-database
 export DB_SSLMODE=require
 ```
 
+### Creating a Postgres Service User
+
+The following queries will create a service user on the postgres server, and grant it
+the necessary permissions for the API runtime as well as database migrations:  
+
+```sql
+-- Connect to the database first
+-- \c go_api_template
+
+-- Create the service user
+CREATE USER go_api_service WITH PASSWORD 'your_secure_password_here';
+
+-- Grant connection to the database
+GRANT CONNECT ON DATABASE go_api_template TO go_api_service;
+
+-- Grant schema usage and creation privileges (needed for migrations)
+GRANT USAGE, CREATE ON SCHEMA public TO go_api_service;
+
+-- Grant privileges on existing tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO go_api_service;
+
+-- Grant privileges on existing sequences
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO go_api_service;
+
+-- Grant privileges on future tables (for migrations)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO go_api_service;
+
+-- Grant privileges on future sequences (for migrations)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO go_api_service;
+```
+
+## Testing
+
+The project includes comprehensive unit tests for the API endpoints using [testify](https://github.com/stretchr/testify) for assertions and mocks. Tests follow Go best practices and cover both happy and unhappy paths.
+
+### Running Tests
+
+```shell
+# Run all tests
+make test
+
+# Generate coverage report
+make test/coverage
+```
+
+The `test/coverage` command generates:
+- `coverage.out` - Coverage data file
+- `coverage.html` - HTML report (open in browser to view)
+
+**Note:** Generated code in the `gen/` folder is automatically excluded from coverage reports.
+
+### Test Structure
+
+Tests are organized by feature using **go-sqlmock** for database mocking:  
+
+- `internal/users/create_user_test.go` - Unit tests for CreateUser endpoint
+- `internal/users/list_users_test.go` - Unit tests for ListUsers endpoint
+- `internal/users/service_test.go` - Unit tests for service configuration
+
+### Code Organization
+
+The codebase follows a **vertical slice architecture** where each feature owns its complete implementation:
+
+```
+internal/
+├── otel.go                      # OpenTelemetry setup (shared)
+└── users/                       # Users feature domain
+    ├── service.go               # Service struct, DB connection, Config
+    ├── create_user.go           # CreateUser RPC + database logic
+    ├── list_users.go            # ListUsers RPC + database logic
+    ├── create_user_test.go      # CreateUser tests
+    ├── list_users_test.go       # ListUsers tests
+    └── service_test.go          # Service tests
+```
+
+**Benefits of this structure:**
+
+- Each endpoint file contains both the handler and its database queries
+- Easy to find all code related to a specific feature
+- Natural boundaries for splitting into microservices later
+- No need for separate repository interfaces or mocks
+- Tests use go-sqlmock for fast, isolated database testing
+
+### Testing Philosophy
+
+Tests use **go-sqlmock** to mock database interactions directly:  
+
+- Fast, isolated unit tests without real database connections
+- Tests verify both handler logic and SQL queries
+- Easy to set up expectations for database behavior
+- No need for complex mocking frameworks or interfaces
+
+Test coverage includes:
+- ✅ RPC success paths
+- ✅ RPC with database errors
+- ✅ RPC with invalid input (empty fields)
+- ✅ Proper context handling
+- ✅ Error propagation
+- 🔜 Benchmark tests for performance-critical utils
+- 🔜 Fuzzy tests
+
+### Example Test Output
+
+```shell
+$ make test
+go test ./... -v
+=== RUN   TestService_CreateUser
+=== RUN   TestService_CreateUser/success_-_valid_user_creation
+=== RUN   TestService_CreateUser/error_-_database_error_during_insert
+=== RUN   TestService_CreateUser/error_-_scan_error
+=== RUN   TestService_ListUsers
+=== RUN   TestService_ListUsers/success_-_returns_multiple_users
+=== RUN   TestService_ListUsers/success_-_returns_empty_list
+=== RUN   TestService_ListUsers/error_-_database_query_fails
+=== RUN   TestService_ListUsers/error_-_scan_error
+PASS
+ok      github.com/zcking/go-api-template/internal/users    0.285s
+```
+
 ## Changing Protobuf
 
 You can change the protobuf at [proto/users/v1/users.proto](./proto/users/v1/users.proto). Then use `make generate` to generate all new stubs, which are written to the [gen/](./gen/) directory.
+
+```shell
+make generate
+```
+
+## Adding New Endpoints
+
+To add a new RPC endpoint to the users service:
+
+1. Update the protobuf: `proto/users/v1/users.proto`
+2. Run `make generate` to regenerate gRPC stubs
+3. Create a new file: `internal/users/<endpoint_name>.go`
+4. Implement the RPC handler with its database logic
+5. Create tests: `internal/users/<endpoint_name>_test.go`
+

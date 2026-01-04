@@ -6,3 +6,7 @@ Makefile
 *.md
 Dockerfile
 .dockerignore
+scratch/
+coverage.*
+*.txt
+/server

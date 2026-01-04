@@ -12,8 +12,13 @@ ENV GOTOOLCHAIN=auto
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the source code and compile it
+# Copy the source code
 COPY . .
+
+# Run tests
+RUN go test ./... -v
+
+# Compile the binary
 RUN go build -o /app/server ./cmd/server
 
 # Production stage - final image
