@@ -3,6 +3,8 @@ package users
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -80,7 +82,8 @@ func TestService_CreateUser(t *testing.T) {
 			tt.mockSetup(mock)
 
 			// Create service with mock DB
-			service := &Service{db: db}
+			logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+			service := &Service{db: db, logger: logger}
 			ctx := context.Background()
 
 			// Execute test

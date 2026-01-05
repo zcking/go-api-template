@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -15,13 +15,10 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
-	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	grpc_logging "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	gatewayruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -51,10 +48,17 @@ func getEnvOrDefault(key, defaultValue string) string {
 }
 
 func main() {
-	// Initialize zap logger
-	logger, _ := zap.NewProduction(zap.AddCaller())
-	defer logger.Sync()
 	flag.Parse()
+
+	// Initialize slog with JSON handler
+	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelInfo,
+	})
+	// Wrap with trace context handler to inject trace/span IDs
+	traceHandler := internal.NewTraceContextHandler(jsonHandler)
+	logger := slog.New(traceHandler)
+	slog.SetDefault(logger)
 
 	// Initialize OpenTelemetry (optional - will use no-op if Databricks config is missing)
 	ctx := context.Background()
@@ -67,13 +71,14 @@ func main() {
 	}
 	tp, err := internal.InitOTel(ctx, otelConfig)
 	if err != nil {
-		log.Fatalf("failed to initialize OpenTelemetry: %v", err)
+		slog.Error("failed to initialize OpenTelemetry", "error", err)
+		os.Exit(1)
 	}
 	// Only defer shutdown if TracerProvider was created (tp != nil)
 	if tp != nil {
 		defer func() {
 			if err := internal.ShutdownOTel(ctx, tp, otelConfig.ShutdownTimeout); err != nil {
-				log.Printf("failed to shutdown OpenTelemetry: %v", err)
+				slog.Error("failed to shutdown OpenTelemetry", "error", err)
 			}
 		}()
 	}
@@ -90,37 +95,41 @@ func main() {
 
 	// Run database migrations
 	if err := runMigrations(dbConfig); err != nil {
-		log.Fatalf("failed to run migrations: %v", err)
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
 	}
 
 	// Create a TCP listener for the gRPC server
 	lis, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		log.Fatalf("failed to create (gRPC) listener: %v", err)
+		slog.Error("failed to create (gRPC) listener", "error", err)
+		os.Exit(1)
 	}
 
 	// Create a gRPC server and attach our implementation
 	opts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-			grpc_ctxtags.UnaryServerInterceptor(),
-			grpc_zap.UnaryServerInterceptor(logger),
-		)),
-		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
-			grpc_ctxtags.StreamServerInterceptor(),
-			grpc_zap.StreamServerInterceptor(logger),
-		)),
+		grpc.UnaryInterceptor(
+			grpc_logging.UnaryServerInterceptor(interceptorLogger(logger)),
+		),
+		grpc.StreamInterceptor(
+			grpc_logging.StreamServerInterceptor(interceptorLogger(logger)),
+		),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	}
 	grpcServer := grpc.NewServer(opts...)
-	impl, err := users.NewService(dbConfig)
+	impl, err := users.NewService(dbConfig, logger)
 	if err != nil {
-		log.Fatalf("failed to create users service instance: %v", err)
+		slog.Error("failed to create users service instance", "error", err)
+		os.Exit(1)
 	}
 	userspb.RegisterUserServiceServer(grpcServer, impl)
 
 	// Serve the gRPC server, in a separate goroutine to avoid blocking
 	go func() {
-		log.Fatalln(grpcServer.Serve(lis))
+		if err := grpcServer.Serve(lis); err != nil {
+			slog.Error("gRPC server failed", "error", err)
+			os.Exit(1)
+		}
 	}()
 
 	// Now setup the gRPC Gateway, a REST proxy to the gRPC server
@@ -130,13 +139,15 @@ func main() {
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
-		log.Fatalf("failed to create gRPC client: %v", err)
+		slog.Error("failed to create gRPC client", "error", err)
+		os.Exit(1)
 	}
 
-	mux := runtime.NewServeMux()
+	mux := gatewayruntime.NewServeMux()
 	err = userspb.RegisterUserServiceHandler(context.Background(), mux, conn)
 	if err != nil {
-		log.Fatalf("failed to register gRPC gateway: %v", err)
+		slog.Error("failed to register gRPC gateway", "error", err)
+		os.Exit(1)
 	}
 
 	// Wrap HTTP handler with OpenTelemetry instrumentation
@@ -156,13 +167,13 @@ func main() {
 
 	go func() {
 		sig := <-signalChan
-		log.Printf("received signal %s | shutting down servers...\n", sig)
+		slog.Info("received signal, shutting down servers", "signal", sig.String())
 
 		// Shutdown HTTP server
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := gwServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("failed to shutdown HTTP server: %v", err)
+			slog.Error("failed to shutdown HTTP server", "error", err)
 		}
 
 		// Shutdown gRPC server
@@ -170,17 +181,21 @@ func main() {
 
 		// Close database connection
 		if err := impl.Close(); err != nil {
-			log.Fatalf("failed to properly close users service: %v", err)
+			slog.Error("failed to properly close users service", "error", err)
+			os.Exit(1)
 		}
 
 		// Shutdown OpenTelemetry
 		if err := internal.ShutdownOTel(context.Background(), tp, otelConfig.ShutdownTimeout); err != nil {
-			log.Printf("failed to shutdown OpenTelemetry: %v", err)
+			slog.Error("failed to shutdown OpenTelemetry", "error", err)
 		}
 	}()
 
-	log.Println("gRPC Gateway listening on http://0.0.0.0:8081")
-	log.Fatalln(gwServer.ListenAndServe())
+	slog.Info("gRPC Gateway listening", "address", "http://0.0.0.0:8081")
+	if err := gwServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("HTTP server failed", "error", err)
+		os.Exit(1)
+	}
 }
 
 func runMigrations(config users.Config) error {
@@ -201,6 +216,15 @@ func runMigrations(config users.Config) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	log.Println("Database migrations completed successfully")
+	slog.Info("Database migrations completed successfully")
 	return nil
+}
+
+// interceptorLogger adapts slog.Logger to grpc_logging.Logger.
+// This code is simple enough to be copied and not imported.
+// Based on: https://github.com/grpc-ecosystem/go-grpc-middleware/blob/main/interceptors/logging/examples/slog/example_test.go
+func interceptorLogger(l *slog.Logger) grpc_logging.Logger {
+	return grpc_logging.LoggerFunc(func(ctx context.Context, lvl grpc_logging.Level, msg string, fields ...any) {
+		l.Log(ctx, slog.Level(lvl), msg, fields...)
+	})
 }

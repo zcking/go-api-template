@@ -79,6 +79,44 @@ The following environment variables are optional. These should be used to export
 
 If the OTel configurations are not set, the API will continue to run as normal, but not export traces.
 
+## Logging
+
+The application uses Go's native [`slog`](https://pkg.go.dev/log/slog) package for structured logging. All logs are emitted as JSON to stdout/stderr with trace context automatically injected for correlation with OpenTelemetry traces.
+
+### Log Format
+
+Logs are emitted in JSON format with the following structure:
+
+```json
+{
+  "time": "2026-01-04T12:00:00.123Z",
+  "level": "INFO",
+  "msg": "user created",
+  "trace_id": "80f198ee56343ba864fe8b2a57d3eff7",
+  "span_id": "e457b5a2e4d86bd1",
+  "user_id": 123
+}
+```
+
+### Log Collection (External)
+
+Following cloud-native principles, the application emits structured logs to stdout/stderr, and log collection/export is handled by platform infrastructure. This separation of concerns allows you to change log destinations without modifying application code.
+
+### Kubernetes Deployment
+
+For Kubernetes deployments, I recommend deploying [Fluentd](https://www.fluentd.org/) or [Fluent Bit](https://fluentbit.io/) as a DaemonSet to collect logs from all pods and forward them to your observability platform (e.g., DataDog, NewRelic, Databricks Zerobus).
+
+This is a work in progress, but I am currently working on sharing Kubernetes manifests (using Kustomize) and a deployment guide in [`deployment/kustomize/`](deployment/kustomize/README.md); however, please note I only intend to provide these resources for Kubernetes deployments to cover the majority of cloud-native audiences.
+
+
+### Trace-Log Correlation
+
+Logs automatically include `trace_id` and `span_id` fields when a request is within an OpenTelemetry trace context. This enables correlation between logs and traces in your observability platform:
+
+- **Logs**: Structured JSON with trace context
+- **Traces**: Exported via OTLP to Databricks Unity Catalog
+- **Correlation**: Use `trace_id` to link logs and traces together
+
 ## Database Migrations
 
 Database migrations are **automatically run** when the application starts via `make compose/up`. No manual intervention needed for normal development!

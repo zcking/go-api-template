@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"strings"
@@ -41,7 +41,6 @@ func InitOTel(ctx context.Context, config OTelConfig) (*sdktrace.TracerProvider,
 
 	// Check if Databricks configuration is provided
 	if config.WorkspaceURL == "" || config.Token == "" || config.UCTableName == "" {
-		log.Printf("WARNING: OpenTelemetry Databricks exporter not configured. Missing required environment variables:")
 		missing := []string{}
 		if config.WorkspaceURL == "" {
 			missing = append(missing, "DATABRICKS_WORKSPACE_URL")
@@ -52,8 +51,9 @@ func InitOTel(ctx context.Context, config OTelConfig) (*sdktrace.TracerProvider,
 		if config.UCTableName == "" {
 			missing = append(missing, "DATABRICKS_UC_TABLE_NAME")
 		}
-		log.Printf("WARNING: Missing: %s", strings.Join(missing, ", "))
-		log.Printf("WARNING: Application will continue without trace export. Traces will be collected but not exported.")
+		slog.Warn("OpenTelemetry Databricks exporter not configured",
+			"missing_vars", strings.Join(missing, ", "),
+			"message", "Application will continue without trace export. Traces will be collected but not exported.")
 
 		// Set up a no-op TracerProvider so instrumentation still works
 		noopTracerProvider := noop.NewTracerProvider()

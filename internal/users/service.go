@@ -3,7 +3,7 @@ package users
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/XSAM/otelsql"
 	_ "github.com/lib/pq"
@@ -15,7 +15,8 @@ import (
 // Service handles gRPC requests for user operations
 type Service struct {
 	userspb.UnimplementedUserServiceServer
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 }
 
 // Config holds configuration for database connections
@@ -29,8 +30,12 @@ type Config struct {
 }
 
 // NewService creates a new user service with a database connection
-func NewService(config Config) (*Service, error) {
-	log.Printf("setting up database connection to %s:%s/%s...", config.Host, config.Port, config.DBName)
+func NewService(config Config, logger *slog.Logger) (*Service, error) {
+	logger.Info("setting up database connection",
+		"host", config.Host,
+		"port", config.Port,
+		"dbname", config.DBName,
+	)
 
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		config.Host, config.Port, config.User, config.Password, config.DBName, config.SSLMode)
@@ -55,12 +60,13 @@ func NewService(config Config) (*Service, error) {
 	}
 
 	return &Service{
-		db: db,
+		db:     db,
+		logger: logger,
 	}, nil
 }
 
 // Close closes the database connection
 func (s *Service) Close() error {
-	log.Println("shutting down database connection...")
+	s.logger.Info("shutting down database connection")
 	return s.db.Close()
 }
