@@ -71,12 +71,24 @@ The application supports the following environment variables for database config
 - `DB_NAME` - Database name (default: go_api_template)
 - `DB_SSLMODE` - SSL mode (default: disable for local, require for production)
 
-The following environment variables are optional. These should be used to export OpenTelemetry traces and metrics to [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-overview).  
+The following environment variables are optional and configure OpenTelemetry trace and metrics export via OTLP. These use standard OpenTelemetry environment variables and work with any OTLP-compatible backend (e.g., Databricks Zerobus Ingest, Honeycomb, Grafana Cloud).
 
-- `DATABRICKS_WORKSPACE_URL` - Databricks workspace URL (e.g., `workspace_name.cloud.databricks.com`)
-- `DATABRICKS_TOKEN` - PAT or OAuth token for Zerobus authentication
-- `DATABRICKS_UC_TABLE_NAME` - Name of the Unity Catalog table to write OTel spans (traces) to (e.g., `catalog.schema.prefix_otel_spans`)
-- `DATABRICKS_UC_METRICS_TABLE_NAME` - Name of the Unity Catalog table to write OTel metrics to (e.g., `catalog.schema.prefix_otel_metrics`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - Base URL for OTLP export. The trace exporter automatically appends "/v1/traces" and the metrics exporter automatically appends "/v1/metrics"
+- `OTEL_EXPORTER_OTLP_HEADERS` - Headers to include with OTLP requests (format: `key1=value1,key2=value2`)
+- `OTEL_SERVICE_NAME` - Service name for OpenTelemetry resource attributes (default: `go-api-template`)
+
+**Example: Databricks Zerobus Ingest**
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://workspace.databricks.com/api/2.0/otel
+OTEL_EXPORTER_OTLP_METRICS_HEADERS="Authorization=Bearer dapi...,X-Databricks-UC-Table-Name=catalog.schema.metrics"
+OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer dapi...,X-Databricks-UC-Table-Name=catalog.schema.traces"
+OTEL_SERVICE_NAME=go-api-template
+```
+
+This will automatically export to:
+- Traces: `https://workspace.databricks.com/api/2.0/otel/v1/traces`
+- Metrics: `https://workspace.databricks.com/api/2.0/otel/v1/metrics`
 
 If the OTel configurations are not set, the API will continue to run as normal, but not export traces or metrics.
 
@@ -115,7 +127,7 @@ This is a work in progress, but I am currently working on sharing Kubernetes man
 Logs automatically include `trace_id` and `span_id` fields when a request is within an OpenTelemetry trace context. This enables correlation between logs and traces in your observability platform:
 
 - **Logs**: Structured JSON with trace context
-- **Traces**: Exported via OTLP to Databricks Unity Catalog
+- **Traces**: Exported via OTLP to your configured backend
 - **Correlation**: Use `trace_id` to link logs and traces together
 
 ## Metrics
@@ -150,7 +162,7 @@ The following metrics are automatically collected:
 
 ### Metrics Export
 
-Metrics are exported via OTLP/HTTP to Databricks Zerobus Ingest endpoint (`/api/2.0/otel/v1/metrics`) and written to the Unity Catalog table specified by `DATABRICKS_UC_METRICS_TABLE_NAME`.
+Metrics are exported via OTLP/HTTP to the endpoint configured by `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` if you need separate endpoints for traces and metrics).
 
 ### Custom Metrics
 

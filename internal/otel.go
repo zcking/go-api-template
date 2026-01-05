@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -22,16 +20,15 @@ import (
 
 // OTelConfig holds configuration for OpenTelemetry
 type OTelConfig struct {
-	ServiceName        string
-	WorkspaceURL       string
-	Token              string
-	UCTableName        string
-	UCMetricsTableName string
-	ShutdownTimeout    time.Duration
+	ServiceName     string
+	ShutdownTimeout time.Duration
 }
 
-// InitOTel initializes OpenTelemetry with Databricks Zerobus exporter.
-// If Databricks configuration is not provided, it returns nil and sets up a no-op TracerProvider.
+// InitOTel initializes OpenTelemetry with OTLP exporter.
+// Configuration is read from standard OpenTelemetry environment variables:
+// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+// - OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS
+// If no endpoint is configured, it returns nil and sets up a no-op TracerProvider.
 // The app will continue to run without exporting traces.
 func InitOTel(ctx context.Context, config OTelConfig) (*sdktrace.TracerProvider, error) {
 	// Set default service name if not provided
@@ -42,20 +39,14 @@ func InitOTel(ctx context.Context, config OTelConfig) (*sdktrace.TracerProvider,
 		config.ShutdownTimeout = 30 * time.Second
 	}
 
-	// Check if Databricks configuration is provided
-	if config.WorkspaceURL == "" || config.Token == "" || config.UCTableName == "" {
-		missing := []string{}
-		if config.WorkspaceURL == "" {
-			missing = append(missing, "DATABRICKS_WORKSPACE_URL")
-		}
-		if config.Token == "" {
-			missing = append(missing, "DATABRICKS_TOKEN")
-		}
-		if config.UCTableName == "" {
-			missing = append(missing, "DATABRICKS_UC_TABLE_NAME")
-		}
-		slog.Warn("OpenTelemetry Databricks exporter not configured",
-			"missing_vars", strings.Join(missing, ", "),
+	// Create OTLP HTTP exporter - reads configuration from environment variables automatically
+	// OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+	// OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS
+	exporter, err := otlptracehttp.New(ctx)
+	if err != nil {
+		// If exporter creation fails (e.g., invalid endpoint config), fall back to no-op
+		slog.Warn("OpenTelemetry trace exporter not configured or failed to initialize",
+			"error", err,
 			"message", "Application will continue without trace export. Traces will be collected but not exported.")
 
 		// Set up a no-op TracerProvider so instrumentation still works
@@ -69,38 +60,6 @@ func InitOTel(ctx context.Context, config OTelConfig) (*sdktrace.TracerProvider,
 		))
 
 		return nil, nil
-	}
-
-	// Normalize workspace URL - strip protocol if present
-	workspaceURL := strings.TrimSpace(config.WorkspaceURL)
-	if strings.HasPrefix(workspaceURL, "https://") {
-		workspaceURL = strings.TrimPrefix(workspaceURL, "https://")
-	} else if strings.HasPrefix(workspaceURL, "http://") {
-		workspaceURL = strings.TrimPrefix(workspaceURL, "http://")
-	}
-	// Remove trailing slash if present
-	workspaceURL = strings.TrimSuffix(workspaceURL, "/")
-
-	// Build the endpoint URL using net/url for proper construction
-	endpointURL := &url.URL{
-		Scheme: "https",
-		Host:   workspaceURL,
-		Path:   "/api/2.0/otel/v1/traces",
-	}
-	endpoint := endpointURL.String()
-
-	// Create OTLP HTTP exporter with Databricks-specific headers
-	exporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpointURL(endpoint),
-		otlptracehttp.WithHeaders(map[string]string{
-			"content-type":               "application/x-protobuf",
-			"X-Databricks-UC-Table-Name": config.UCTableName,
-			"Authorization":              fmt.Sprintf("Bearer %s", config.Token),
-		}),
-		// Use HTTP/protobuf protocol (default for otlptracehttp)
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
 	// Create resource with service information
@@ -139,8 +98,11 @@ func ShutdownOTel(ctx context.Context, tp *sdktrace.TracerProvider, timeout time
 	return tp.Shutdown(shutdownCtx)
 }
 
-// InitOTelMetrics initializes OpenTelemetry metrics with Databricks Zerobus exporter.
-// If Databricks configuration is not provided, it returns nil and sets up a no-op MeterProvider.
+// InitOTelMetrics initializes OpenTelemetry metrics with OTLP exporter.
+// Configuration is read from standard OpenTelemetry environment variables:
+// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+// - OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_METRICS_HEADERS
+// If no endpoint is configured, it returns nil and sets up a no-op MeterProvider.
 // The app will continue to run without exporting metrics.
 func InitOTelMetrics(ctx context.Context, config OTelConfig) (*metric.MeterProvider, error) {
 	// Set default service name if not provided
@@ -151,20 +113,14 @@ func InitOTelMetrics(ctx context.Context, config OTelConfig) (*metric.MeterProvi
 		config.ShutdownTimeout = 30 * time.Second
 	}
 
-	// Check if Databricks configuration is provided
-	if config.WorkspaceURL == "" || config.Token == "" || config.UCMetricsTableName == "" {
-		missing := []string{}
-		if config.WorkspaceURL == "" {
-			missing = append(missing, "DATABRICKS_WORKSPACE_URL")
-		}
-		if config.Token == "" {
-			missing = append(missing, "DATABRICKS_TOKEN")
-		}
-		if config.UCMetricsTableName == "" {
-			missing = append(missing, "DATABRICKS_UC_METRICS_TABLE_NAME")
-		}
-		slog.Warn("OpenTelemetry Databricks metrics exporter not configured",
-			"missing_vars", strings.Join(missing, ", "),
+	// Create OTLP HTTP metrics exporter - reads configuration from environment variables automatically
+	// OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+	// OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_METRICS_HEADERS
+	exporter, err := otlpmetrichttp.New(ctx)
+	if err != nil {
+		// If exporter creation fails (e.g., invalid endpoint config), fall back to no-op
+		slog.Warn("OpenTelemetry metrics exporter not configured or failed to initialize",
+			"error", err,
 			"message", "Application will continue without metrics export. Metrics will be collected but not exported.")
 
 		// Set up a no-op MeterProvider so instrumentation still works
@@ -175,38 +131,6 @@ func InitOTelMetrics(ctx context.Context, config OTelConfig) (*metric.MeterProvi
 		otel.SetMeterProvider(noopMeterProvider)
 
 		return nil, nil
-	}
-
-	// Normalize workspace URL - strip protocol if present
-	workspaceURL := strings.TrimSpace(config.WorkspaceURL)
-	if strings.HasPrefix(workspaceURL, "https://") {
-		workspaceURL = strings.TrimPrefix(workspaceURL, "https://")
-	} else if strings.HasPrefix(workspaceURL, "http://") {
-		workspaceURL = strings.TrimPrefix(workspaceURL, "http://")
-	}
-	// Remove trailing slash if present
-	workspaceURL = strings.TrimSuffix(workspaceURL, "/")
-
-	// Build the endpoint URL using net/url for proper construction
-	endpointURL := &url.URL{
-		Scheme: "https",
-		Host:   workspaceURL,
-		Path:   "/api/2.0/otel/v1/metrics",
-	}
-	endpoint := endpointURL.String()
-
-	// Create OTLP HTTP metrics exporter with Databricks-specific headers
-	exporter, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpointURL(endpoint),
-		otlpmetrichttp.WithHeaders(map[string]string{
-			"content-type":               "application/x-protobuf",
-			"X-Databricks-UC-Table-Name": config.UCMetricsTableName,
-			"Authorization":              fmt.Sprintf("Bearer %s", config.Token),
-		}),
-		// Use HTTP/protobuf protocol (default for otlpmetrichttp)
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP metrics exporter: %w", err)
 	}
 
 	// Create resource with service information
