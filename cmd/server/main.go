@@ -19,6 +19,7 @@ import (
 	gatewayruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -28,16 +29,17 @@ import (
 )
 
 var (
-	dbHost            = flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "Database host")
-	dbPort            = flag.String("db-port", getEnvOrDefault("DB_PORT", "5432"), "Database port")
-	dbUser            = flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "Database user")
-	dbPassword        = flag.String("db-password", getEnvOrDefault("DB_PASSWORD", "postgres"), "Database password")
-	dbName            = flag.String("db-name", getEnvOrDefault("DB_NAME", "go_api_template"), "Database name")
-	dbSSLMode         = flag.String("db-ssl-mode", getEnvOrDefault("DB_SSLMODE", "disable"), "Database SSL mode")
-	otelServiceName   = flag.String("otel-service-name", getEnvOrDefault("OTEL_SERVICE_NAME", "go-api-template"), "OpenTelemetry service name")
-	databricksURL     = flag.String("databricks-workspace-url", getEnvOrDefault("DATABRICKS_WORKSPACE_URL", ""), "Databricks workspace URL (e.g., myworkspace.databricks.com)")
-	databricksToken   = flag.String("databricks-token", getEnvOrDefault("DATABRICKS_TOKEN", ""), "Databricks authentication token")
-	databricksUCTable = flag.String("databricks-uc-table-name", getEnvOrDefault("DATABRICKS_UC_TABLE_NAME", ""), "Databricks Unity Catalog table name (e.g., catalog.schema.prefix_otel_spans)")
+	dbHost                   = flag.String("db-host", getEnvOrDefault("DB_HOST", "localhost"), "Database host")
+	dbPort                   = flag.String("db-port", getEnvOrDefault("DB_PORT", "5432"), "Database port")
+	dbUser                   = flag.String("db-user", getEnvOrDefault("DB_USER", "postgres"), "Database user")
+	dbPassword               = flag.String("db-password", getEnvOrDefault("DB_PASSWORD", "postgres"), "Database password")
+	dbName                   = flag.String("db-name", getEnvOrDefault("DB_NAME", "go_api_template"), "Database name")
+	dbSSLMode                = flag.String("db-ssl-mode", getEnvOrDefault("DB_SSLMODE", "disable"), "Database SSL mode")
+	otelServiceName          = flag.String("otel-service-name", getEnvOrDefault("OTEL_SERVICE_NAME", "go-api-template"), "OpenTelemetry service name")
+	databricksURL            = flag.String("databricks-workspace-url", getEnvOrDefault("DATABRICKS_WORKSPACE_URL", ""), "Databricks workspace URL (e.g., myworkspace.databricks.com)")
+	databricksToken          = flag.String("databricks-token", getEnvOrDefault("DATABRICKS_TOKEN", ""), "Databricks authentication token")
+	databricksUCTable        = flag.String("databricks-uc-table-name", getEnvOrDefault("DATABRICKS_UC_TABLE_NAME", ""), "Databricks Unity Catalog table name for traces (e.g., catalog.schema.prefix_otel_spans)")
+	databricksUCMetricsTable = flag.String("databricks-uc-metrics-table-name", getEnvOrDefault("DATABRICKS_UC_METRICS_TABLE_NAME", ""), "Databricks Unity Catalog table name for metrics (e.g., catalog.schema.prefix_otel_metrics)")
 )
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -63,24 +65,46 @@ func main() {
 	// Initialize OpenTelemetry (optional - will use no-op if Databricks config is missing)
 	ctx := context.Background()
 	otelConfig := internal.OTelConfig{
-		ServiceName:     *otelServiceName,
-		WorkspaceURL:    *databricksURL,
-		Token:           *databricksToken,
-		UCTableName:     *databricksUCTable,
-		ShutdownTimeout: 30 * time.Second,
+		ServiceName:        *otelServiceName,
+		WorkspaceURL:       *databricksURL,
+		Token:              *databricksToken,
+		UCTableName:        *databricksUCTable,
+		UCMetricsTableName: *databricksUCMetricsTable,
+		ShutdownTimeout:    30 * time.Second,
 	}
 	tp, err := internal.InitOTel(ctx, otelConfig)
 	if err != nil {
-		slog.Error("failed to initialize OpenTelemetry", "error", err)
+		slog.Error("failed to initialize OpenTelemetry traces", "error", err)
 		os.Exit(1)
 	}
 	// Only defer shutdown if TracerProvider was created (tp != nil)
 	if tp != nil {
 		defer func() {
 			if err := internal.ShutdownOTel(ctx, tp, otelConfig.ShutdownTimeout); err != nil {
-				slog.Error("failed to shutdown OpenTelemetry", "error", err)
+				slog.Error("failed to shutdown OpenTelemetry traces", "error", err)
 			}
 		}()
+	}
+
+	// Initialize OpenTelemetry metrics (optional - will use no-op if Databricks config is missing)
+	mp, err := internal.InitOTelMetrics(ctx, otelConfig)
+	if err != nil {
+		slog.Error("failed to initialize OpenTelemetry metrics", "error", err)
+		os.Exit(1)
+	}
+	// Only defer shutdown if MeterProvider was created (mp != nil)
+	if mp != nil {
+		defer func() {
+			if err := internal.ShutdownOTelMetrics(ctx, mp, otelConfig.ShutdownTimeout); err != nil {
+				slog.Error("failed to shutdown OpenTelemetry metrics", "error", err)
+			}
+		}()
+
+		// Start runtime metrics collection (goroutines, memory, GC stats, CPU usage)
+		// This will automatically export metrics via the MeterProvider
+		if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second)); err != nil {
+			slog.Warn("failed to start runtime metrics collection", "error", err)
+		}
 	}
 
 	// Setup database configuration
@@ -185,9 +209,16 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Shutdown OpenTelemetry
+		// Shutdown OpenTelemetry traces
 		if err := internal.ShutdownOTel(context.Background(), tp, otelConfig.ShutdownTimeout); err != nil {
-			slog.Error("failed to shutdown OpenTelemetry", "error", err)
+			slog.Error("failed to shutdown OpenTelemetry traces", "error", err)
+		}
+
+		// Shutdown OpenTelemetry metrics
+		if mp != nil {
+			if err := internal.ShutdownOTelMetrics(context.Background(), mp, otelConfig.ShutdownTimeout); err != nil {
+				slog.Error("failed to shutdown OpenTelemetry metrics", "error", err)
+			}
 		}
 	}()
 

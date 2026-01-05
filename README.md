@@ -71,13 +71,14 @@ The application supports the following environment variables for database config
 - `DB_NAME` - Database name (default: go_api_template)
 - `DB_SSLMODE` - SSL mode (default: disable for local, require for production)
 
-The following environment variables are optional. These should be used to export OpenTelemetry traces to [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-overview).  
+The following environment variables are optional. These should be used to export OpenTelemetry traces and metrics to [Zerobus Ingest](https://docs.databricks.com/aws/en/ingestion/zerobus-overview).  
 
 - `DATABRICKS_WORKSPACE_URL` - Databricks workspace URL (e.g., `workspace_name.cloud.databricks.com`)
 - `DATABRICKS_TOKEN` - PAT or OAuth token for Zerobus authentication
-- `DATABRICKS_UC_TABLE_NAME` - Name of the table to write OTel spans to
+- `DATABRICKS_UC_TABLE_NAME` - Name of the Unity Catalog table to write OTel spans (traces) to (e.g., `catalog.schema.prefix_otel_spans`)
+- `DATABRICKS_UC_METRICS_TABLE_NAME` - Name of the Unity Catalog table to write OTel metrics to (e.g., `catalog.schema.prefix_otel_metrics`)
 
-If the OTel configurations are not set, the API will continue to run as normal, but not export traces.
+If the OTel configurations are not set, the API will continue to run as normal, but not export traces or metrics.
 
 ## Logging
 
@@ -116,6 +117,63 @@ Logs automatically include `trace_id` and `span_id` fields when a request is wit
 - **Logs**: Structured JSON with trace context
 - **Traces**: Exported via OTLP to Databricks Unity Catalog
 - **Correlation**: Use `trace_id` to link logs and traces together
+
+## Metrics
+
+The application automatically collects and exports OpenTelemetry metrics to Databricks Unity Catalog via Zerobus Ingest. Metrics are exported every 60 seconds by default.
+
+### Collected Metrics
+
+The following metrics are automatically collected:
+
+- **Runtime Metrics** (Go runtime):
+  - Goroutine count
+  - Memory allocation (heap, stack, system)
+  - Garbage collection statistics
+  - CPU usage
+
+- **HTTP Server Metrics** (gRPC Gateway):
+  - Request duration
+  - Request size
+  - Response size
+  - Active requests
+
+- **gRPC Server Metrics**:
+  - RPC duration
+  - Request/response message counts
+  - Status codes
+
+- **Database Metrics** (PostgreSQL):
+  - Connection pool statistics (idle, in-use, wait duration)
+  - Query duration
+  - Query errors
+
+### Metrics Export
+
+Metrics are exported via OTLP/HTTP to Databricks Zerobus Ingest endpoint (`/api/2.0/otel/v1/metrics`) and written to the Unity Catalog table specified by `DATABRICKS_UC_METRICS_TABLE_NAME`.
+
+### Custom Metrics
+
+To add custom business metrics, obtain a Meter from the global MeterProvider:
+
+```go
+import "go.opentelemetry.io/otel"
+
+meter := otel.Meter("service-name")
+
+// Create a counter
+counter, _ := meter.Int64Counter("custom.counter")
+counter.Add(ctx, 1, attribute.String("key", "value"))
+
+// Create a histogram
+histogram, _ := meter.Int64Histogram("custom.duration")
+histogram.Record(ctx, durationMs, attribute.String("operation", "create_user"))
+
+// Create a gauge
+gauge, _ := meter.Int64ObservableGauge("custom.gauge")
+```
+
+Custom metrics will automatically be exported along with the built-in metrics.
 
 ## Database Migrations
 
