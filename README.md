@@ -74,7 +74,8 @@ The application supports the following environment variables for database config
 The following environment variables are optional and configure OpenTelemetry trace and metrics export via OTLP. These use standard OpenTelemetry environment variables and work with any OTLP-compatible backend (e.g., Databricks Zerobus Ingest, Honeycomb, Grafana Cloud).
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT` - Base URL for OTLP export. The trace exporter automatically appends "/v1/traces" and the metrics exporter automatically appends "/v1/metrics"
-- `OTEL_EXPORTER_OTLP_HEADERS` - Headers to include with OTLP requests (format: `key1=value1,key2=value2`)
+- `OTEL_EXPORTER_OTLP_METRICS_HEADERS` - Headers to include with OTLP metric export requests (format: `key1=value1,key2=value2`)
+- `OTEL_EXPORTER_OTLP_TRACES_HEADERS` - Headers to include with OTLP traces export requests (format: `key1=value1,key2=value2`)
 - `OTEL_SERVICE_NAME` - Service name for OpenTelemetry resource attributes (default: `go-api-template`)
 
 **Example: Databricks Zerobus Ingest**
