@@ -93,6 +93,17 @@ This will automatically export to:
 
 If the OTel configurations are not set, the API will continue to run as normal, but not export traces or metrics.
 
+**Example: Splunk Observability Cloud**
+
+```bash
+OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://ingest.us1.signalfx.com/v2/datapoint/otlp
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://ingest.us1.signalfx.com/v2/trace/otlp
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_METRICS_HEADERS="X-SF-TOKEN=YOUR_SPLUNK_OBSERVABILITY_API_KEY"
+OTEL_EXPORTER_OTLP_TRACES_HEADERS="X-SF-TOKEN=YOUR_SPLUNK_OBSERVABILITY_API_KEY"
+OTEL_SERVICE_NAME=go-api-template
+```
+
 ## Logging
 
 The application uses Go's native [`slog`](https://pkg.go.dev/log/slog) package for structured logging. All logs are emitted as JSON to stdout/stderr with trace context automatically injected for correlation with OpenTelemetry traces.
